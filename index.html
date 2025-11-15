@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="google-site-verification" content="g0L7jzYSQvylUB1k37cnX_mddHK7R1tU4Cxwxtn3Wek" />
+    <meta charset="utf-8" />
+    <title>SQL Injection</title>
+
+    <style>
+        :root {
+            --bg: #f5f7fa;
+            --card-bg: #ffffff;
+            --text: #222;
+            --accent: #4a6cf7;
+            --accent-light: #e3e9ff;
+            --danger: #e05757;
+            --success: #3ca86b;
+            --radius: 12px;
+            --shadow: 0 4px 14px rgba(0,0,0,0.1);
+            font-size: 17px;
+        }
+
+        body {
+            margin: 0;
+            padding: 40px 20px;
+            font-family: system-ui, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            margin-bottom: 25px;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        .card {
+            background: var(--card-bg);
+            padding: 25px;
+            width: 100%;
+            max-width: 900px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 30px;
+        }
+
+        label {
+            display: block;
+            margin: 12px 0 6px;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: var(--radius);
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            background: var(--accent);
+            border: none;
+            padding: 10px 16px;
+            color: white;
+            border-radius: var(--radius);
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            margin: 8px 10px 0 0;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #3d5ded;
+        }
+
+        #resetBtn {
+            background: #888;
+        }
+
+        #resetBtn:hover {
+            background: #6e6e6e;
+        }
+
+        #sqlQuery {
+            background: var(--accent-light);
+            padding: 15px;
+            border-radius: var(--radius);
+            font-family: Consolas, monospace;
+            margin-top: 10px;
+            white-space: pre-wrap;
+        }
+
+        .highlight {
+            background: #ffef9e;
+            padding: 2px 4px;
+            border-radius: 5px;
+        }
+
+        .bad {
+            background: #ffd0d0;
+            padding: 2px 4px;
+            border-radius: 5px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 16px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: center;
+        }
+
+        th {
+            background: #f0f2f5;
+            font-weight: 700;
+        }
+
+        .explain {
+            margin-top: 16px;
+            padding: 15px;
+            background: #fafafa;
+            border-left: 5px solid var(--accent);
+            border-radius: var(--radius);
+            line-height: 1.5;
+        }
+
+        #message {
+            font-weight: bold;
+            margin-top: 15px;
+            font-size: 18px;
+        }
+
+        .ok {
+            color: var(--success);
+            font-weight: 700;
+        }
+
+        .no {
+            color: var(--danger);
+            font-weight: 700;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>SQL Injection Playground</h1>
+
+<!-- Login Card -->
+<div class="card">
+    <h2>Login Form</h2>
+    <label>Username:</label>
+    <input type="text" id="username" placeholder="Try: ' OR '1'='1">
+
+    <label>Password:</label>
+    <input type="text" id="password" placeholder="Enter any password">
+
+    <button id="loginBtn">Login</button>
+    <button id="resetBtn">Reset Database</button>
+
+    <p id="message"></p>
+    <p id="loggedAs"></p>
+</div>
+
+<!-- SQL Query Card -->
+<div class="card">
+    <h2>Generated SQL Query</h2>
+    <div id="sqlQuery"></div>
+    <div class="explain" id="explainBox" style="display:none"></div>
+</div>
+
+<!-- Database Card -->
+<div class="card">
+    <h2>Database (users table)</h2>
+    <table id="dbTable">
+        <tr><th>ID</th><th>Username</th><th>Password</th></tr>
+    </table>
+</div>
+
+<script>
+// Simulated database
+let users = [
+    {id: 1, username: "admin", password: "admin123"},
+    {id: 2, username: "guest", password: "guest123"}
+];
+
+function renderDB() {
+    const table = document.getElementById("dbTable");
+    table.innerHTML = "<tr><th>ID</th><th>Username</th><th>Password</th></tr>";
+    for (const u of users) {
+        const r = table.insertRow();
+        r.insertCell(0).innerText = u.id;
+        r.insertCell(1).innerText = u.username;
+        r.insertCell(2).innerText = u.password;
+    }
+}
+renderDB();
+
+function escapeHtml(s){
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Extract username before comment tokens (-- , #, /*) if present
+function extractBeforeComment(input) {
+    const match = input.match(/(.*?)(--\s|--$|#|\/\*)/);
+    if (match) return match[1];
+    return input;
+}
+
+// analyze query and produce explain text + highlighted HTML
+function analyzeInjection(query) {
+    const out = { highlighted: escapeHtml(query), findings: [] };
+
+    // highlight block comments
+    out.highlighted = out.highlighted.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="bad">$1</span>');
+
+    if (/--(\s|$)/.test(query)) {
+        out.findings.push({ type: "dash-comment", text: "Detected `--` comment. Everything after it is ignored." });
+        out.highlighted = out.highlighted.replace(/(--\s[\s\S]*)/ , '<span class="bad">$1</span>');
+    }
+
+    if (/#/.test(query)) {
+        out.findings.push({ type: "hash-comment", text: "Detected `#` single-line comment." });
+        out.highlighted = out.highlighted.replace(/(#.*)/ , '<span class="bad">$1</span>');
+    }
+
+    const tautologyRegex = /'([^']+)'\s*=\s*'\1'|'\s*1\s*'\s*=\s*'\s*1\s*'|'1'\s*=\s*'1'|'\d+'\s*=\s*'\d+'/gi;
+    let tMatch;
+    while ((tMatch = tautologyRegex.exec(query)) !== null) {
+        const found = tMatch[0];
+        out.findings.push({ type: "tautology", text: `Detected tautology: ${found} — always true.` });
+        out.highlighted = out.highlighted.replace(escapeHtml(found), '<span class="highlight">' + escapeHtml(found) + '</span>');
+    }
+
+    if (/\bOR\b/i.test(query) && /('|")/.test(query)) {
+        out.findings.push({ type: "or-injection", text: "Detected OR usage, often part of a bypass injection." });
+    }
+
+    return out;
+}
+
+// Main login logic
+function login() {
+    const uInput = document.getElementById("username").value;
+    const pInput = document.getElementById("password").value;
+
+    const query = `SELECT * FROM users WHERE username='${uInput}' AND password='${pInput}'`;
+    document.getElementById("sqlQuery").innerHTML = escapeHtml(query);
+
+    const analysis = analyzeInjection(query);
+    document.getElementById("sqlQuery").innerHTML = analysis.highlighted;
+
+    const explainBox = document.getElementById("explainBox");
+    if (analysis.findings.length > 0) {
+        explainBox.style.display = "block";
+        explainBox.innerHTML = "<strong>Findings:</strong><ul>" +
+            analysis.findings.map(f => `<li>${escapeHtml(f.text)}</li>`).join('') +
+            "</ul>";
+    } else {
+        explainBox.style.display = "none";
+        explainBox.innerHTML = "";
+    }
+
+    let loggedIn = false;
+    let loggedAs = null;
+    let reason = null;
+
+    const hasDashComment = /--(\s|$)/.test(uInput) || /--(\s|$)/.test(pInput);
+    const hasHashComment = /#/.test(uInput) || /#/.test(pInput);
+    const hasBlockComment = /\/\*/.test(uInput) || /\/\*/.test(pInput);
+
+    if (hasDashComment || hasHashComment || hasBlockComment) {
+        const cleanedU = extractBeforeComment(uInput).replace(/'$/, "");
+        const match = users.find(user => user.username === cleanedU);
+        if (match) {
+            loggedIn = true;
+            loggedAs = match.username;
+            reason = "comment injection bypass";
+        } else {
+            if (!users.some(user => user.username === "hacker")) {
+                users.push({id: users.length + 1, username: "hacker", password: "injected"});
+                renderDB();
+            }
+            loggedIn = true;
+            loggedAs = "hacker (injected)";
+            reason = "injected account (comment bypass)";
+        }
+    } else {
+        const tautologyPattern = /'\s*\w+\s*'\s*=\s*'\s*\w+\s*'|'\s*1\s*'\s*=\s*'\s*1\s*'|'1'\s*=\s*'1'|'\d+'\s*=\s*'\d+'/i;
+        const orPattern = /\bOR\b/i;
+        if ((orPattern.test(uInput) || orPattern.test(pInput)) && tautologyPattern.test(uInput + " " + pInput)) {
+            if (!users.some(user => user.username === "hacker")) {
+                users.push({id: users.length + 1, username: "hacker", password: "injected"});
+                renderDB();
+            }
+            loggedIn = true;
+            loggedAs = "hacker (injected)";
+            reason = "tautology injection";
+        } else {
+            const match = users.find(user => user.username === uInput && user.password === pInput);
+            if (match) {
+                loggedIn = true;
+                loggedAs = match.username;
+                reason = "normal login";
+            }
+        }
+    }
+
+    const msg = document.getElementById("message");
+    const who = document.getElementById("loggedAs");
+
+    if (loggedIn) {
+        msg.style.color = "green";
+        msg.innerText = "Login successful! (" + reason + ")";
+        who.innerHTML = "Logged in as: <span class='ok'>" + escapeHtml(loggedAs) + "</span>";
+    } else {
+        msg.style.color = "crimson";
+        msg.innerText = "Invalid username or password";
+        who.innerHTML = "";
+    }
+}
+
+// Reset DB to original state
+function resetDB() {
+    users = [
+        {id: 1, username: "admin", password: "admin123"},
+        {id: 2, username: "guest", password: "guest123"}
+    ];
+    renderDB();
+    document.getElementById("message").innerText = "";
+    document.getElementById("loggedAs").innerText = "";
+    document.getElementById("sqlQuery").innerText = "";
+    document.getElementById("explainBox").style.display = "none";
+}
+
+document.getElementById("loginBtn").addEventListener("click", login);
+document.getElementById("resetBtn").addEventListener("click", resetDB);
+</script>
+
+</body>
+</html>
